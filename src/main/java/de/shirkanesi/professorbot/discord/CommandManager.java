@@ -1,0 +1,174 @@
+package de.shirkanesi.professorbot.discord;
+
+import de.shirkanesi.professorbot.discord.command.Command;
+import de.shirkanesi.professorbot.discord.command.CommandBucket;
+import de.shirkanesi.professorbot.discord.command.CommandPoll;
+import de.shirkanesi.professorbot.discord.command.DiscordFunction;
+import de.shirkanesi.professorbot.discord.command.GitHubCommand;
+import de.shirkanesi.professorbot.discord.command.GuildExecuteHandler;
+import de.shirkanesi.professorbot.discord.command.HelpCommand;
+import de.shirkanesi.professorbot.discord.command.LegacyCommand;
+import de.shirkanesi.professorbot.discord.command.PrivateExecuteHandler;
+import de.shirkanesi.professorbot.discord.command.QuoteCommand;
+import de.shirkanesi.professorbot.discord.command.RandomCardCommand;
+import de.shirkanesi.professorbot.discord.command.ThemawechselCMD;
+import de.shirkanesi.professorbot.discord.listener.DefaultListener;
+import de.shirkanesi.professorbot.discord.listener.NewMemberJoinListener;
+import de.shirkanesi.professorbot.settings.SettingsController;
+import de.shirkanesi.professorbot.util.StringUtil;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.events.message.guild.GuildMessageReceivedEvent;
+import net.dv8tion.jda.api.events.message.priv.PrivateMessageReceivedEvent;
+import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class CommandManager extends ListenerAdapter {
+
+    private static CommandManager instance;
+
+    private final List<Command> commands = new ArrayList<>();
+
+    /**
+     * Registering all the Commands by calling the {@link #registerFunction(DiscordFunction...)}
+     * and registering the EventListeners by calling {@link #registerEventListener(Object...)}
+     */
+    public CommandManager(){
+        instance = this;
+
+
+        registerFunction(new HelpCommand());
+        registerFunction(new GitHubCommand());
+        registerFunction(new ThemawechselCMD());
+        registerFunction(new QuoteCommand());
+        registerFunction(new RandomCardCommand());
+        registerFunction(new CommandPoll());
+
+        registerEventListener(this);
+        registerEventListener(new DefaultListener());
+        registerEventListener(new NewMemberJoinListener());
+
+
+
+    }
+
+    /**
+     * Register a new function for Discord
+     * You can add a new command by passing a instance of {@link Command} or {@link CommandBucket}
+     * @param functions an instance from the Function
+     */
+    private void registerFunction(DiscordFunction... functions) {
+        for (DiscordFunction function : functions) {
+            if(function instanceof Command) {
+                commands.add((Command) function);
+            }
+            if(function instanceof CommandBucket) {
+                ArrayList<DiscordFunction> discordFunctions = new ArrayList<>();
+                ((CommandBucket) function).register(discordFunctions);
+                discordFunctions.forEach(this::registerFunction);
+            }
+        }
+    }
+
+    /**
+     * Register new eventListeners
+     * Just adds it to the JDA instance but use the method anyway for future feature compatibility
+     * @param eventListeners an instance from the EventListener
+     */
+    private void registerEventListener(Object... eventListeners) {
+        DiscordController.getJDA().addEventListener(eventListeners);
+    }
+
+    /**
+     * Get all currently registered commands
+     * @return a List with Commands
+     */
+    public static List<Command> getCommands() {
+        return instance.commands;
+    }
+
+    @Override
+    public void onGuildMessageReceived(@NotNull GuildMessageReceivedEvent event) {
+        CommandManager.checkForExecute(event);
+    }
+
+    @Override
+    public void onPrivateMessageReceived(@NotNull PrivateMessageReceivedEvent event) {
+        CommandManager.checkForExecute(event);
+    }
+
+    /**
+     * Check if a received message is a command by checking the prefix and if the alias is a registered command.
+     * If so the command gets executed by calling the
+     * {@link LegacyCommand#onExecute(GuildMessageReceivedEvent, String[]) method.
+     *
+     * THIS METHOD IS FOR INTERNAL USE AND SHOULD NEVER BE CALLED FROM A COMMAND OR OTHER CLASS!
+     *
+     * @param event from the EventHandler
+     */
+    private static void checkForExecute(GuildMessageReceivedEvent event){
+        String[] arguments = checkPrefix(event.getMessage());
+        if(arguments == null) return;
+
+        for(Command command : instance.commands){
+            if(command instanceof GuildExecuteHandler) {
+                if(Arrays.stream(command.getAlias()).anyMatch(s -> s.equalsIgnoreCase(arguments[1]))){
+                    String[] args = Arrays.copyOfRange(arguments,2, arguments.length);
+                    ((GuildExecuteHandler) command).onExecute(event, args);
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if a received private message is a command by checking the prefix and if the alias is a registered command.
+     * If so the command gets executed by calling
+     * the {@link PrivateExecuteHandler#onPrivateExecute(PrivateMessageReceivedEvent, String[])} method.
+     *
+     * THIS METHOD IS FOR INTERNAL USE AND SHOULD NEVER BE CALLED FROM A COMMAND OR OTHER CLASS!
+     *
+     * @param event fromt eh EventHandler
+     */
+    private static void checkForExecute(PrivateMessageReceivedEvent event){
+        String[] arguments = checkPrefix(event.getMessage());
+        if(arguments == null) return;
+
+        for(Command command : instance.commands){
+            if(command instanceof PrivateExecuteHandler) {
+                if(Arrays.stream(command.getAlias()).anyMatch(s -> s.equalsIgnoreCase(arguments[1]))){
+                    String[] args = Arrays.copyOfRange(arguments,2, arguments.length);
+                    ((PrivateExecuteHandler)command).onPrivateExecute(event, args);
+                }
+            }
+        }
+    }
+
+    /**
+     * Checks if the prefix from a given command is one of the prefix defined in the settings.yml
+     * If to it parses the message to a array later used in the onExecuted from {@link LegacyCommand} or {@link PrivateExecuteHandler}
+     * Uses a parsed to detect longer strings by double quotes.
+     *
+     * THIS METHOD IS FOR INTERNAL USE AND SHOULD NOT BE CALLED UNLESS YOU KNOW WHAT YOU ARE DOING!
+     *
+     * @param message the message as an JDA Object
+     * @return a String[] or null if the arguments are empty
+     */
+    @SuppressWarnings("unchecked")
+    private static String[] checkPrefix(Message message) {
+        String msg = message.getContentDisplay();
+        if(((List<String>) SettingsController.getValue("discord.prefix")).stream().noneMatch(msg::startsWith)){
+            return null;
+        }
+
+        String[] arguments = StringUtil.parseString(msg).toArray(new String[0]);
+
+        if(arguments.length == 0){
+            return null;
+        }
+        return arguments;
+    }
+
+}
